@@ -8,6 +8,16 @@ use crate::{debug, util};
 use crate::metadata::ObjectMetadata;
 use crate::util::read_file;
 
+#[cfg(not(feature = "async"))]
+use reqwest::blocking::Client;
+#[cfg(feature = "async")]
+use reqwest::Client;
+
+#[cfg(feature = "async")]
+use maybe_async::maybe_async as maybe_async_attr;
+#[cfg(not(feature = "async"))]
+use maybe_async::must_be_sync as maybe_async_attr;
+
 impl OSS {
     /// 获取对象
     ///
@@ -21,6 +31,7 @@ impl OSS {
     /// let bytes = oss.get_object("/hello.txt", build).await.unwrap();
     /// println!("file content: {}", String::from_utf8_lossy(bytes.as_slice()));
     /// ```
+    #[maybe_async_attr]
     pub async fn get_object<S: AsRef<str>>(
         &self,
         key: S,
@@ -31,7 +42,7 @@ impl OSS {
             .build_request(key.as_str(), build)
             .map_err(|e| OssError::Err(format!("build request error: {}", e)))?;
         debug!("oss logget object url: {} headers: {:?}", url,headers);
-        let client = reqwest::Client::new();
+        let client = Client::new();
         let response = client.get(url).headers(headers).send().await?;
         return if response.status().is_success() {
             let result = response.bytes().await?;
@@ -122,6 +133,7 @@ impl OSS {
     /// let file_path = "./hello.txt";
     /// oss.put_object_from_file("/hello.txt", file_path, builder).await.unwrap();
     /// ```
+    #[maybe_async_attr]
     pub async fn put_object_from_file<S: AsRef<str>>(
         &self,
         key: S,
@@ -136,9 +148,9 @@ impl OSS {
             .build_request(key.as_str(), build)
             .map_err(|e| OssError::Err(format!("build request error: {}", e)))?;
         debug!("oss log: put object from file: {} headers: {:?}", url,headers);
-        let client = reqwest::Client::new();
+        let client = Client::new();
         let response = client.put(url).headers(headers).body(buffer).send().await?;
-        return if response.status().is_success() {
+        if response.status().is_success() {
             Ok(())
         } else {
             let status = response.status();
@@ -148,7 +160,7 @@ impl OSS {
                 "get object status: {} error: {}",
                 status, result
             )))
-        };
+        }
     }
 
     /// 上传文件(内存)
@@ -163,6 +175,7 @@ impl OSS {
     /// let buffer = std::fs::read(file_path).unwrap();
     /// oss.pub_object_from_buffer("/hello.txt", buffer.as_slice(), builder).await.unwrap();
     /// ```
+    #[maybe_async_attr]
     pub async fn pub_object_from_buffer<S: AsRef<str>>(
         &self,
         key: S,
@@ -176,14 +189,14 @@ impl OSS {
             .build_request(key.as_str(), build)
             .map_err(|e| OssError::Err(format!("build request error: {}", e)))?;
         debug!("oss log: put object from file: {} headers: {:?}", url,headers);
-        let client = reqwest::Client::new();
+        let client = Client::new();
         let response = client
             .put(url)
             .headers(headers)
             .body(buffer.to_owned())
             .send()
             .await?;
-        return if response.status().is_success() {
+        if response.status().is_success() {
             Ok(())
         } else {
             let status = response.status();
@@ -193,7 +206,7 @@ impl OSS {
                 "get object status: {} error: {}",
                 status, result
             )))
-        };
+        }
     }
 
     /// 删除文件
@@ -206,6 +219,7 @@ impl OSS {
     ///    .with_expire(60);
     /// oss.delete_object("/hello.txt", builder).await.unwrap();
     /// ```
+    #[maybe_async_attr]
     pub async fn delete_object<S: AsRef<str>>(
         &self,
         key: S,
@@ -218,9 +232,9 @@ impl OSS {
             .build_request(key.as_str(), build)
             .map_err(|e| OssError::Err(format!("build request error: {}", e)))?;
         debug!("oss log: put object from file: {} headers: {:?}", url,headers);
-        let client = reqwest::Client::new();
+        let client = Client::new();
         let response = client.delete(url).headers(headers).send().await?;
-        return if response.status().is_success() {
+        if response.status().is_success() {
             Ok(())
         } else {
             let status = response.status();
@@ -230,7 +244,7 @@ impl OSS {
                 "get object status: {} error: {}",
                 status, result
             )))
-        };
+        }
     }
 
     /// 获取对象元数据
@@ -244,6 +258,7 @@ impl OSS {
     /// let metadata = oss.get_object_metadata("/hello.txt", builder).await.unwrap();
     /// println!("{:?}", metadata);
     /// ```
+    #[maybe_async_attr]
     pub async fn get_object_metadata<S: AsRef<str>>(&self, key: S, build: RequestBuilder) -> Result<ObjectMetadata, OssError>{
         let mut build = build.clone();
         build.method = RequestType::Head;
@@ -251,12 +266,12 @@ impl OSS {
         let (url, headers) = self.build_request(key.as_str(), build)
             .map_err(|e| OssError::Err(format!("build request error: {}", e)))?;
         debug!("put object from file: {} headers: {:?}", url,headers);
-        let client = reqwest::Client::new();
+        let client = Client::new();
         let response = client.head(url)
             .headers(headers)
             .send()
             .await?;
-        return if response.status().is_success() {
+        if response.status().is_success() {
             let metadata = ObjectMetadata::new(response.headers());
             Ok(metadata)
         } else {
@@ -264,6 +279,88 @@ impl OSS {
             let result = response.text().await?;
             debug!("get object status: {} error: {}", status,result);
             Err(OssError::Err(format!("get object status: {} error: {}", status, result)))
-        };
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use crate::entity::PolicyBuilder;
+    use crate::oss::OSS;
+    use crate::request::RequestBuilder;
+
+    #[inline]
+    fn init_log() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_line_number(true)
+            .init();
+    }
+
+    #[test]
+    fn test_get_upload_object_policy() {
+        init_log();
+        let oss = OSS::from_env();
+        let policy_builder = PolicyBuilder::new()
+            .with_expire(60 * 60)//1个小时过期
+            .with_upload_dir("upload/mydir/")//上传目录
+            .with_content_type("text/plain")//只允许上传文本.txt
+            .with_max_upload_size(100 * 1024 * 1024);//只允许文件上传大小1G以内
+        let policy = oss.get_upload_object_policy(policy_builder).unwrap();
+        println!("policy: {:?}", policy);
+        //使用postman测试上传
+        //form-data的参数为OSSAccessKeyId、policy、signature、success_action_status、key、file
+        //key为上传的文件名包含路径、例如：upload/mydir/test.txt
+        //file为上传的文件，类型跟with_content_type一致
+    }
+
+    #[test]
+    fn test_put_object_from_file() {
+        init_log();
+        let oss = OSS::from_env();
+        let builder = RequestBuilder::new()
+            .with_expire(60);
+        let file_path = "./Cargo.toml";
+        oss.put_object_from_file("/cargo.toml", file_path, builder).unwrap();
+    }
+
+    #[test]
+    fn test_put_object_from_buffer() {
+        init_log();
+        let oss = OSS::from_env();
+        let builder = RequestBuilder::new()
+            .with_expire(60);
+        let file_path = "./Cargo.toml";
+        let buffer = std::fs::read(file_path).unwrap();
+        oss.pub_object_from_buffer("/cargo.toml", buffer.as_slice(), builder).unwrap();
+    }
+
+    #[test]
+    fn test_delete_object() {
+        init_log();
+        let oss = OSS::from_env();
+        let builder = RequestBuilder::new()
+            .with_expire(60);
+        oss.delete_object("/cargo.toml", builder).unwrap();
+    }
+
+    #[test]
+    fn test_get_object() {
+        init_log();
+        dotenvy::dotenv().ok();
+        let oss = OSS::from_env();
+        let build = RequestBuilder::new()
+            .with_cdn("http://cdn.ipadump.com");
+        let bytes = oss.get_object("/hello.txt", build).unwrap();
+        println!("file content: {}", String::from_utf8_lossy(bytes.as_slice()));
+    }
+
+    #[test]
+    fn test_get_object_metadata() {
+        init_log();
+        dotenvy::dotenv().ok();
+        let oss = OSS::from_env();
+        let build = RequestBuilder::new();
+        let metadata = oss.get_object_metadata("/hello.txt", build).unwrap();
+        println!("file metadata: {:?}", metadata);
     }
 }

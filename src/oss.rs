@@ -83,7 +83,7 @@ impl<'a> OSS {
 
     #[cfg(feature = "debug-print")]
     pub fn open_debug(&self) {
-        std::env::set_var("RUST_LOG", "oss=debug");
+        unsafe{std::env::set_var("RUST_LOG", "oss=debug")};
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
             .with_line_number(true)
